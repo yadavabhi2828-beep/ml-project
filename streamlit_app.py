@@ -1,7 +1,7 @@
 import streamlit as st
-import joblib
 import pandas as pd
 import numpy as np
+import requests
 
 # Set page configuration
 st.set_page_config(
@@ -38,23 +38,24 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# Load model and scalers
-@st.cache_resource
-def load_resources():
-    try:
-        model = joblib.load('random_forest_model.pkl')
-        scaler_amount = joblib.load('scaler_amount.pkl')
-        scaler_time = joblib.load('scaler_time.pkl')
-        return model, scaler_amount, scaler_time
-    except Exception as e:
-        st.error(f"Error loading resources: {e}")
-        return None, None, None
-
-model, scaler_amount, scaler_time = load_resources()
+# API Configuration
+API_BASE_URL = "http://127.0.0.1:5000"
 
 # Sidebar
 st.sidebar.title("Navigation")
 st.sidebar.info("This application uses a Random Forest model to detect fraudulent credit card transactions.")
+
+# Model Selection
+st.sidebar.subheader("Model Settings")
+model_choice = st.sidebar.radio(
+    "Select Model",
+    ["Full Model (Best Accuracy)", "Simple Model (Time & Amount Only)"],
+    help="Full Model requires V1-V28 features. Simple Model only needs Time and Amount."
+)
+
+use_simple_model = "Simple Model" in model_choice
+
+
 
 # Main content
 st.title("🛡️ Credit Card Fraud Detection")
@@ -71,60 +72,74 @@ with tab1:
         time_val = st.number_input("Time (Seconds since first transaction)", min_value=0.0, value=0.0)
         amount_val = st.number_input("Amount ($)", min_value=0.0, value=100.0)
 
-    with col2:
-        st.subheader("Anonymized Features (V1-V28)")
-        st.caption("These features are PCA-transformed for privacy. You can generate random values for testing.")
-        
-        if st.button("Generate Random Features"):
-            random_features = np.random.randn(28)
-            st.session_state['features'] = random_features
-        
-        if 'features' not in st.session_state:
-            st.session_state['features'] = np.zeros(28)
-        
-        # Display features in an expander to save space
-        with st.expander("View/Edit Features V1-V28"):
-            features = []
-            for i in range(28):
-                val = st.number_input(f"V{i+1}", value=float(st.session_state['features'][i]), key=f"v{i+1}")
-                features.append(val)
+    features = []
+    if not use_simple_model:
+        with col2:
+            st.subheader("Anonymized Features (V1-V28)")
+            st.caption("These features are PCA-transformed for privacy. You can generate random values for testing.")
+            
+            if st.button("Generate Random Features"):
+                random_features = np.random.randn(28)
+                st.session_state['features'] = random_features
+            
+            if 'features' not in st.session_state:
+                st.session_state['features'] = np.zeros(28)
+            
+            # Display features in an expander to save space
+            with st.expander("View/Edit Features V1-V28"):
+                for i in range(28):
+                    val = st.number_input(f"V{i+1}", value=float(st.session_state['features'][i]), key=f"v{i+1}")
+                    features.append(val)
+    else:
+        with col2:
+            st.info("Simple Model selected. V1-V28 features are not required.")
 
     if st.button("Analyze Transaction", type="primary"):
-        if model and scaler_amount and scaler_time:
-            # Prepare input data
-            input_data = pd.DataFrame([features], columns=[f'V{i}' for i in range(1, 29)])
-            
-            # Scale Time and Amount
-            scaled_amount = scaler_amount.transform([[amount_val]])
-            scaled_time = scaler_time.transform([[time_val]])
-            
-            input_data['scaled_amount'] = scaled_amount.flatten()
-            input_data['scaled_time'] = scaled_time.flatten()
-            
-            # Reorder
-            cols = [f'V{i}' for i in range(1, 29)] + ['scaled_amount', 'scaled_time']
-            final_input = input_data[cols]
-            
-            # Predict
-            prediction = model.predict(final_input)[0]
-            probability = model.predict_proba(final_input)[0][1]
-            
-            st.markdown("---")
-            st.subheader("Analysis Result")
-            
-            if prediction == 1:
-                st.error(f"🚨 FRAUD DETECTED! (Probability: {probability:.2%})")
-                st.markdown("This transaction shows patterns consistent with fraudulent activity.")
+        try:
+            if use_simple_model:
+                # Call Simple Model API
+                payload = {
+                    'Time': time_val,
+                    'Amount': amount_val
+                }
+                response = requests.post(f"{API_BASE_URL}/predict_simple", json=payload)
             else:
-                st.success(f"✅ Legitimate Transaction (Probability of Fraud: {probability:.2%})")
-                st.markdown("This transaction appears to be safe.")
+                # Call Full Model API
+                payload = {
+                    'Time': time_val,
+                    'Amount': amount_val,
+                    **{f'V{i}': features[i-1] for i in range(1, 29)}
+                }
+                response = requests.post(f"{API_BASE_URL}/predict", json=payload)
+            
+            if response.status_code == 200:
+                result = response.json()
+                prediction = result['prediction']
+                probability = result['probability']
                 
-        else:
-            st.error("Model or scalers not loaded. Please check the server logs.")
+                st.markdown("---")
+                st.subheader("Analysis Result")
+                
+                if prediction == 1:
+                    st.error(f"🚨 FRAUD DETECTED! (Probability: {probability:.2%})")
+                    st.markdown("This transaction shows patterns consistent with fraudulent activity.")
+                else:
+                    st.success(f"✅ Legitimate Transaction (Probability of Fraud: {probability:.2%})")
+                    st.markdown("This transaction appears to be safe.")
+            else:
+                st.error(f"API Error: {response.json().get('error', 'Unknown error')}")
+                
+        except requests.exceptions.ConnectionError:
+            st.error("❌ Cannot connect to API. Please make sure Flask app is running on port 5000.")
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
 
 with tab2:
     st.header("Upload Transactions")
-    st.markdown("Upload a CSV file containing transaction details. Required columns: `Time`, `Amount`, `V1`...`V28`.")
+    if use_simple_model:
+        st.markdown("Upload a CSV file. Required columns: `Time`, `Amount`.")
+    else:
+        st.markdown("Upload a CSV file. Required columns: `Time`, `Amount`, `V1`...`V28`.")
     
     uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
     
@@ -134,33 +149,50 @@ with tab2:
             st.write("Preview of uploaded data:", df.head())
             
             # Validation
-            required_cols = ['Time', 'Amount'] + [f'V{i}' for i in range(1, 29)]
+            if use_simple_model:
+                required_cols = ['Time', 'Amount']
+            else:
+                required_cols = ['Time', 'Amount'] + [f'V{i}' for i in range(1, 29)]
+                
             missing_cols = [col for col in required_cols if col not in df.columns]
             
             if missing_cols:
                 st.error(f"Missing columns: {missing_cols}")
             else:
                 if st.button("Analyze Batch"):
-                    if model and scaler_amount and scaler_time:
-                        # Preprocess
-                        process_df = df.copy()
+                    try:
+                        predictions = []
+                        probabilities = []
                         
-                        # Scale
-                        process_df['scaled_amount'] = scaler_amount.transform(process_df['Amount'].values.reshape(-1,1))
-                        process_df['scaled_time'] = scaler_time.transform(process_df['Time'].values.reshape(-1,1))
-                        
-                        # Select and reorder for model
-                        cols = [f'V{i}' for i in range(1, 29)] + ['scaled_amount', 'scaled_time']
-                        X = process_df[cols]
-                        
-                        # Predict
-                        predictions = model.predict(X)
-                        probabilities = model.predict_proba(X)[:, 1]
+                        with st.spinner("Analyzing transactions..."):
+                            for idx, row in df.iterrows():
+                                if use_simple_model:
+                                    payload = {
+                                        'Time': float(row['Time']),
+                                        'Amount': float(row['Amount'])
+                                    }
+                                    response = requests.post(f"{API_BASE_URL}/predict_simple", json=payload)
+                                else:
+                                    payload = {
+                                        'Time': float(row['Time']),
+                                        'Amount': float(row['Amount']),
+                                        **{f'V{i}': float(row[f'V{i}']) for i in range(1, 29)}
+                                    }
+                                    response = requests.post(f"{API_BASE_URL}/predict", json=payload)
+                                
+                                if response.status_code == 200:
+                                    result = response.json()
+                                    predictions.append(result['prediction'])
+                                    probabilities.append(result['probability'])
+                                else:
+                                    st.error(f"Error on row {idx}: {response.json().get('error', 'Unknown')}")
+                                    predictions.append(None)
+                                    probabilities.append(None)
                         
                         # Add results to original df
                         df['Fraud_Prediction'] = predictions
                         df['Fraud_Probability'] = probabilities
-                        df['Status'] = df['Fraud_Prediction'].apply(lambda x: 'Fraud' if x == 1 else 'Legitimate')
+                        df['Status'] = df['Fraud_Prediction'].apply(lambda x: 'Fraud' if x == 1 else 'Legitimate' if x is not None else 'Error')
                         
                         st.success("Analysis Complete!")
                         st.dataframe(df)
@@ -178,10 +210,12 @@ with tab2:
                         fraud_count = df['Fraud_Prediction'].sum()
                         col_m1, col_m2 = st.columns(2)
                         col_m1.metric("Total Transactions", len(df))
-                        col_m2.metric("Fraudulent Transactions Detected", int(fraud_count))
+                        col_m2.metric("Fraudulent Transactions Detected", int(fraud_count) if fraud_count == fraud_count else 0)
                         
-                    else:
-                        st.error("Model resources not loaded.")
+                    except requests.exceptions.ConnectionError:
+                        st.error("❌ Cannot connect to API. Please make sure Flask app is running on port 5000.")
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
                         
         except Exception as e:
             st.error(f"Error processing file: {e}")

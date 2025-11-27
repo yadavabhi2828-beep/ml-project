@@ -151,6 +151,8 @@ def train_evaluate_models(X_train, X_test, y_train, y_test):
     
     return results
 
+    return results
+
 # 5. Feature Importance
 def plot_feature_importance(results, feature_names):
     print("\nPlotting feature importances...")
@@ -165,10 +167,44 @@ def plot_feature_importance(results, feature_names):
             plt.title(f"Feature Importances - {name}")
             plt.bar(range(len(indices)), importances[indices], align="center")
             # feature_names is a pandas Index, so we can index it directly
-            plt.xticks(range(len(indices)), feature_names[indices], rotation=90)
+            # Handle case where feature_names might be different for simple model
+            current_feat_names = feature_names if len(feature_names) == len(importances) else ['scaled_amount', 'scaled_time']
+            
+            plt.xticks(range(len(indices)), current_feat_names[indices], rotation=90)
             plt.tight_layout()
             plt.savefig(f'feature_importance_{name.replace(" ", "_")}.png')
             print(f"Saved feature_importance_{name.replace(' ', '_')}.png")
+
+def train_simple_model(X, y):
+    print("\n--- Training Simple Model (Time & Amount Only) ---")
+    # Use only scaled_amount and scaled_time
+    X_simple = X[['scaled_amount', 'scaled_time']]
+    
+    # Split
+    X_train, X_test, y_train, y_test = train_test_split(X_simple, y, test_size=0.2, random_state=42, stratify=y)
+    
+    # Balance
+    sm = SMOTE(random_state=42)
+    X_train_res, y_train_res = sm.fit_resample(X_train, y_train)
+    
+    # Train Random Forest
+    model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+    model.fit(X_train_res, y_train_res)
+    
+    # Evaluate
+    y_pred = model.predict(X_test)
+    y_pred_proba = model.predict_proba(X_test)[:, 1]
+    
+    print("Simple Model Evaluation:")
+    print(classification_report(y_test, y_pred))
+    auc = roc_auc_score(y_test, y_pred_proba)
+    print(f"Simple Model ROC AUC: {auc:.4f}")
+    
+    # Save
+    joblib.dump(model, 'simple_model.pkl')
+    print("Simple Model saved to simple_model.pkl")
+    
+    return {'Simple Model': {'model': model, 'auc': auc, 'y_pred': y_pred, 'y_pred_proba': y_pred_proba}}
 
 def main():
     df = load_data()
@@ -179,9 +215,18 @@ def main():
     joblib.dump(scaler_time, 'scaler_time.pkl')
     print("Scalers saved to scaler_amount.pkl and scaler_time.pkl")
     
+    # 1. Train Full Models (V1-V28 + Time + Amount)
+    print("\n=== Training Full Models ===")
     X_train, X_test, y_train, y_test = split_and_balance(X, y)
     results = train_evaluate_models(X_train, X_test, y_train, y_test)
     plot_feature_importance(results, X.columns)
+    
+    # 2. Train Simple Model (Time + Amount Only)
+    print("\n=== Training Simple Model ===")
+    simple_results = train_simple_model(X, y)
+    # Plot importance for simple model (pass correct feature names)
+    plot_feature_importance(simple_results, np.array(['scaled_amount', 'scaled_time']))
+
     print("\nDone!")
 
 if __name__ == "__main__":

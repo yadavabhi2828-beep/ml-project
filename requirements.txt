@@ -8,3 +8,6 @@ xgboost
 flask
 requests
 streamlit
+fastapi
+uvicorn
+pydantic

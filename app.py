@@ -10,10 +10,16 @@ try:
     model = joblib.load('random_forest_model.pkl')
     scaler_amount = joblib.load('scaler_amount.pkl')
     scaler_time = joblib.load('scaler_time.pkl')
-    print("Model and scalers loaded successfully.")
+    try:
+        simple_model = joblib.load('simple_model.pkl')
+        print("Model, simple model, and scalers loaded successfully.")
+    except:
+        simple_model = None
+        print("Model and scalers loaded successfully. Simple model not found.")
 except Exception as e:
     print(f"Error loading model or scalers: {e}")
     model = None
+    simple_model = None
     scaler_amount = None
     scaler_time = None
 
@@ -57,6 +63,43 @@ def predict():
         # Predict
         prediction = model.predict(input_df)[0]
         probability = model.predict_proba(input_df)[0][1]
+        
+        result = {
+            'prediction': int(prediction),
+            'probability': float(probability),
+            'status': 'Fraud' if prediction == 1 else 'Legitimate'
+        }
+        
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/predict_simple', methods=['POST'])
+def predict_simple():
+    if not simple_model or not scaler_amount or not scaler_time:
+        return jsonify({'error': 'Simple model or scalers not loaded'}), 500
+
+    try:
+        data = request.get_json()
+        
+        # Check if required columns are present
+        if 'Time' not in data or 'Amount' not in data:
+            return jsonify({'error': 'Missing required fields: Time and/or Amount'}), 400
+        
+        # Preprocess
+        scaled_amount = scaler_amount.transform([[data['Amount']]])
+        scaled_time = scaler_time.transform([[data['Time']]])
+        
+        # Create DataFrame for prediction
+        input_df = pd.DataFrame({
+            'scaled_amount': scaled_amount.flatten(),
+            'scaled_time': scaled_time.flatten()
+        })
+        
+        # Predict
+        prediction = simple_model.predict(input_df)[0]
+        probability = simple_model.predict_proba(input_df)[0][1]
         
         result = {
             'prediction': int(prediction),

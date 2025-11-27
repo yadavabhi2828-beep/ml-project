@@ -142,3 +142,7 @@ cython_debug/
 fraud_predictions_output.csv
 cleaned_creditcard 2.csv
 cleaned_creditcard.csv
+
+# Large model files (too big for GitHub)
+simple_model.pkl
+random_forest_model.pkl
