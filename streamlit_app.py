@@ -2,6 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+from config import Config, setup_logging
+
+# Setup logging
+logger = setup_logging(__name__)
 
 # Set page configuration
 st.set_page_config(
@@ -39,7 +43,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # API Configuration
-API_BASE_URL = "http://127.0.0.1:5000"
+API_BASE_URL = f"http://127.0.0.1:{Config.API_PORT}"
 
 # Sidebar
 st.sidebar.title("Navigation")
@@ -117,6 +121,8 @@ with tab1:
                 prediction = result['prediction']
                 probability = result['probability']
                 
+                logger.info(f"Manual prediction: {'Fraud' if prediction == 1 else 'Legitimate'} (prob: {probability:.4f})")
+                
                 st.markdown("---")
                 st.subheader("Analysis Result")
                 
@@ -128,9 +134,11 @@ with tab1:
                     st.markdown("This transaction appears to be safe.")
             else:
                 st.error(f"API Error: {response.json().get('error', 'Unknown error')}")
+                logger.error(f"API error: {response.text}")
                 
         except requests.exceptions.ConnectionError:
-            st.error("❌ Cannot connect to API. Please make sure Flask app is running on port 5000.")
+            st.error(f"❌ Cannot connect to API. Please make sure API is running on port {Config.API_PORT}.")
+            logger.error("API connection error")
         except Exception as e:
             st.error(f"Error: {str(e)}")
 
@@ -161,61 +169,89 @@ with tab2:
             else:
                 if st.button("Analyze Batch"):
                     try:
-                        predictions = []
-                        probabilities = []
-                        
                         with st.spinner("Analyzing transactions..."):
+                            # Prepare batch payload
+                            transactions = []
                             for idx, row in df.iterrows():
                                 if use_simple_model:
-                                    payload = {
-                                        'Time': float(row['Time']),
-                                        'Amount': float(row['Amount'])
+                                    txn = {
+                                        'time': float(row['Time']),
+                                        'amount': float(row['Amount'])
                                     }
-                                    response = requests.post(f"{API_BASE_URL}/predict_simple", json=payload)
                                 else:
-                                    payload = {
-                                        'Time': float(row['Time']),
-                                        'Amount': float(row['Amount']),
-                                        **{f'V{i}': float(row[f'V{i}']) for i in range(1, 29)}
+                                    txn = {
+                                        'time': float(row['Time']),
+                                        'amount': float(row['Amount']),
+                                        **{f'v{i}': float(row[f'V{i}']) for i in range(1, 29)}
                                     }
-                                    response = requests.post(f"{API_BASE_URL}/predict", json=payload)
+                                transactions.append(txn)
+                            
+                            # Process in chunks if needed
+                            all_predictions = []
+                            all_probabilities = []
+                            total_time = 0
+                            
+                            chunk_size = Config.BATCH_CHUNK_SIZE
+                            for i in range(0, len(transactions), chunk_size):
+                                chunk = transactions[i:i+chunk_size]
+                                
+                                # Call batch API
+                                if use_simple_model:
+                                    endpoint = f"{API_BASE_URL}/predict_simple_batch"
+                                else:
+                                    endpoint = f"{API_BASE_URL}/predict_batch"
+                                
+                                payload = {'transactions': chunk}
+                                response = requests.post(endpoint, json=payload)
                                 
                                 if response.status_code == 200:
                                     result = response.json()
-                                    predictions.append(result['prediction'])
-                                    probabilities.append(result['probability'])
+                                    for pred_result in result['predictions']:
+                                        all_predictions.append(pred_result['prediction'])
+                                        all_probabilities.append(pred_result['probability'])
+                                    total_time += result['processing_time_ms']
+                                    
+                                    # Show progress
+                                    progress = min((i + chunk_size) / len(transactions), 1.0)
+                                    st.progress(progress)
                                 else:
-                                    st.error(f"Error on row {idx}: {response.json().get('error', 'Unknown')}")
-                                    predictions.append(None)
-                                    probabilities.append(None)
-                        
-                        # Add results to original df
-                        df['Fraud_Prediction'] = predictions
-                        df['Fraud_Probability'] = probabilities
-                        df['Status'] = df['Fraud_Prediction'].apply(lambda x: 'Fraud' if x == 1 else 'Legitimate' if x is not None else 'Error')
-                        
-                        st.success("Analysis Complete!")
-                        st.dataframe(df)
-                        
-                        # Download button
-                        csv = df.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="Download Results as CSV",
-                            data=csv,
-                            file_name='fraud_predictions.csv',
-                            mime='text/csv',
-                        )
-                        
-                        # Summary metrics
-                        fraud_count = df['Fraud_Prediction'].sum()
-                        col_m1, col_m2 = st.columns(2)
-                        col_m1.metric("Total Transactions", len(df))
-                        col_m2.metric("Fraudulent Transactions Detected", int(fraud_count) if fraud_count == fraud_count else 0)
+                                    st.error(f"API Error: {response.json().get('detail', 'Unknown error')}")
+                                    logger.error(f"Batch API error: {response.text}")
+                                    break
+                            
+                            if len(all_predictions) == len(df):
+                                # Add results to original df
+                                df['Fraud_Prediction'] = all_predictions
+                                df['Fraud_Probability'] = all_probabilities
+                                df['Status'] = df['Fraud_Prediction'].apply(lambda x: 'Fraud' if x == 1 else 'Legitimate')
+                                
+                                st.success(f"✅ Analysis Complete! Processed in {total_time:.2f}ms")
+                                st.dataframe(df)
+                                
+                                # Download button
+                                csv = df.to_csv(index=False).encode('utf-8')
+                                st.download_button(
+                                    label="Download Results as CSV",
+                                    data=csv,
+                                    file_name='fraud_predictions.csv',
+                                    mime='text/csv',
+                                )
+                                
+                                # Summary metrics
+                                fraud_count = df['Fraud_Prediction'].sum()
+                                col_m1, col_m2, col_m3 = st.columns(3)
+                                col_m1.metric("Total Transactions", len(df))
+                                col_m2.metric("Fraudulent Detected", int(fraud_count))
+                                col_m3.metric("Processing Time", f"{total_time:.0f}ms")
+                                
+                                logger.info(f"Batch analysis complete: {len(df)} transactions, {fraud_count} frauds detected")
                         
                     except requests.exceptions.ConnectionError:
-                        st.error("❌ Cannot connect to API. Please make sure Flask app is running on port 5000.")
+                        st.error(f"❌ Cannot connect to API. Please make sure API is running on port {Config.API_PORT}.")
+                        logger.error("API connection error")
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
+                        logger.error(f"Batch processing error: {str(e)}")
                         
         except Exception as e:
             st.error(f"Error processing file: {e}")

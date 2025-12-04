@@ -9,24 +9,28 @@ from sklearn.metrics import classification_report, confusion_matrix, roc_auc_sco
 from imblearn.over_sampling import SMOTE
 import os
 import joblib
+from config import Config, setup_logging
+
+# Setup logging
+logger = setup_logging(__name__)
 
 try:
     import xgboost as xgb
     XGBOOST_AVAILABLE = True
 except ImportError:
     XGBOOST_AVAILABLE = False
-    print("Warning: XGBoost not installed or failed to import. Skipping XGBoost model.")
+    logger.warning("XGBoost not installed or failed to import. Skipping XGBoost model.")
 except Exception as e:
     XGBOOST_AVAILABLE = False
-    print(f"Warning: XGBoost failed to import: {e}. Skipping XGBoost model.")
+    logger.warning(f"XGBoost failed to import: {e}. Skipping XGBoost model.")
 
 # 1. Data Loading
-def load_data(filepath='cleaned_creditcard.csv'):
+def load_data(filepath=Config.DATA_PATH):
     if os.path.exists(filepath):
-        print(f"Loading dataset from {filepath}...")
+        logger.info(f"Loading dataset from {filepath}...")
         df = pd.read_csv(filepath)
     else:
-        print("Dataset not found. Generating synthetic data for demonstration...")
+        logger.warning("Dataset not found. Generating synthetic data for demonstration...")
         # Generate synthetic data mimicking the structure
         n_samples = 10000
         n_features = 30 # V1-V28 + Time + Amount
@@ -49,17 +53,17 @@ def load_data(filepath='cleaned_creditcard.csv'):
         data = np.column_stack((X, y))
         df = pd.DataFrame(data, columns=columns)
         
-    print(f"Data shape: {df.shape}")
-    print(f"Class distribution:\n{df['Class'].value_counts(normalize=True)}")
+    logger.info(f"Data shape: {df.shape}")
+    logger.info(f"Class distribution:\n{df['Class'].value_counts(normalize=True)}")
     return df
 
 # 2. Preprocessing
 def preprocess_data(df):
-    print("\nPreprocessing data...")
+    logger.info("Preprocessing data...")
     
     # Handle missing values (simple imputation if any)
     if df.isnull().sum().sum() > 0:
-        print("Handling missing values...")
+        logger.info("Handling missing values...")
         df = df.fillna(df.mean())
 
     # Normalize Time and Amount
@@ -82,15 +86,15 @@ def preprocess_data(df):
 
 # 3. Splitting and Balancing
 def split_and_balance(X, y):
-    print("\nSplitting data...")
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    logger.info("Splitting data...")
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=Config.TEST_SIZE, random_state=Config.RANDOM_STATE, stratify=y)
     
-    print("Applying SMOTE to training set...")
-    sm = SMOTE(random_state=42)
+    logger.info("Applying SMOTE to training set...")
+    sm = SMOTE(random_state=Config.SMOTE_RANDOM_STATE)
     X_train_res, y_train_res = sm.fit_resample(X_train, y_train)
     
-    print(f"Original train shape: {y_train.shape}, Fraud count: {sum(y_train)}")
-    print(f"Resampled train shape: {y_train_res.shape}, Fraud count: {sum(y_train_res)}")
+    logger.info(f"Original train shape: {y_train.shape}, Fraud count: {sum(y_train)}")
+    logger.info(f"Resampled train shape: {y_train_res.shape}, Fraud count: {sum(y_train_res)}")
     
     return X_train_res, X_test, y_train_res, y_test
 
@@ -109,17 +113,17 @@ def train_evaluate_models(X_train, X_test, y_train, y_test):
     plt.figure(figsize=(10, 8))
     
     for name, model in models.items():
-        print(f"\nTraining {name}...")
+        logger.info(f"Training {name}...")
         model.fit(X_train, y_train)
         
         y_pred = model.predict(X_test)
         y_pred_proba = model.predict_proba(X_test)[:, 1]
         
         # Metrics
-        print(f"--- {name} Evaluation ---")
-        print(classification_report(y_test, y_pred))
+        logger.info(f"--- {name} Evaluation ---")
+        logger.info(f"\n{classification_report(y_test, y_pred)}")
         auc = roc_auc_score(y_test, y_pred_proba)
-        print(f"ROC AUC: {auc:.4f}")
+        logger.info(f"ROC AUC: {auc:.4f}")
         
         results[name] = {
             'model': model,
@@ -134,12 +138,12 @@ def train_evaluate_models(X_train, X_test, y_train, y_test):
         
         # Confusion Matrix
         cm = confusion_matrix(y_test, y_pred)
-        print(f"Confusion Matrix:\n{cm}")
+        logger.info(f"Confusion Matrix:\n{cm}")
 
         # Save Random Forest model
         if name == 'Random Forest':
-            joblib.dump(model, 'random_forest_model.pkl')
-            print(f"Random Forest model saved to random_forest_model.pkl")
+            joblib.dump(model, Config.FULL_MODEL_PATH)
+            logger.info(f"Random Forest model saved to {Config.FULL_MODEL_PATH}")
 
     plt.plot([0, 1], [0, 1], 'k--')
     plt.xlabel('False Positive Rate')
@@ -147,14 +151,14 @@ def train_evaluate_models(X_train, X_test, y_train, y_test):
     plt.title('ROC Curves')
     plt.legend()
     plt.savefig('roc_curves.png')
-    print("\nROC Curves saved to roc_curves.png")
+    logger.info("ROC Curves saved to roc_curves.png")
     
     return results
 
 
 # 5. Feature Importance
 def plot_feature_importance(results, feature_names):
-    print("\nPlotting feature importances...")
+    logger.info("Plotting feature importances...")
     
     for name, result in results.items():
         model = result['model']
@@ -172,10 +176,10 @@ def plot_feature_importance(results, feature_names):
             plt.xticks(range(len(indices)), current_feat_names[indices], rotation=90)
             plt.tight_layout()
             plt.savefig(f'feature_importance_{name.replace(" ", "_")}.png')
-            print(f"Saved feature_importance_{name.replace(' ', '_')}.png")
+            logger.info(f"Saved feature_importance_{name.replace(' ', '_')}.png")
 
 def train_simple_model(X, y):
-    print("\n--- Training Simple Model (Time & Amount Only) ---")
+    logger.info("--- Training Simple Model (Time & Amount Only) ---")
     # Use only scaled_amount and scaled_time
     X_simple = X[['scaled_amount', 'scaled_time']]
     
@@ -194,14 +198,14 @@ def train_simple_model(X, y):
     y_pred = model.predict(X_test)
     y_pred_proba = model.predict_proba(X_test)[:, 1]
     
-    print("Simple Model Evaluation:")
-    print(classification_report(y_test, y_pred))
+    logger.info("Simple Model Evaluation:")
+    logger.info(f"\n{classification_report(y_test, y_pred)}")
     auc = roc_auc_score(y_test, y_pred_proba)
-    print(f"Simple Model ROC AUC: {auc:.4f}")
+    logger.info(f"Simple Model ROC AUC: {auc:.4f}")
     
     # Save
-    joblib.dump(model, 'simple_model.pkl')
-    print("Simple Model saved to simple_model.pkl")
+    joblib.dump(model, Config.SIMPLE_MODEL_PATH)
+    logger.info(f"Simple Model saved to {Config.SIMPLE_MODEL_PATH}")
     
     return {'Simple Model': {'model': model, 'auc': auc, 'y_pred': y_pred, 'y_pred_proba': y_pred_proba}}
 
@@ -210,23 +214,23 @@ def main():
     X, y, scaler_amount, scaler_time = preprocess_data(df)
     
     # Save scalers
-    joblib.dump(scaler_amount, 'scaler_amount.pkl')
-    joblib.dump(scaler_time, 'scaler_time.pkl')
-    print("Scalers saved to scaler_amount.pkl and scaler_time.pkl")
+    joblib.dump(scaler_amount, Config.SCALER_AMOUNT_PATH)
+    joblib.dump(scaler_time, Config.SCALER_TIME_PATH)
+    logger.info(f"Scalers saved to {Config.SCALER_AMOUNT_PATH} and {Config.SCALER_TIME_PATH}")
     
     # 1. Train Full Models (V1-V28 + Time + Amount)
-    print("\n=== Training Full Models ===")
+    logger.info("=== Training Full Models ===")
     X_train, X_test, y_train, y_test = split_and_balance(X, y)
     results = train_evaluate_models(X_train, X_test, y_train, y_test)
     plot_feature_importance(results, X.columns)
     
     # 2. Train Simple Model (Time + Amount Only)
-    print("\n=== Training Simple Model ===")
+    logger.info("=== Training Simple Model ===")
     simple_results = train_simple_model(X, y)
     # Plot importance for simple model (pass correct feature names)
     plot_feature_importance(simple_results, np.array(['scaled_amount', 'scaled_time']))
 
-    print("\nDone!")
+    logger.info("Training complete!")
 
 if __name__ == "__main__":
     main()
