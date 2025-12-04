@@ -151,7 +151,6 @@ def train_evaluate_models(X_train, X_test, y_train, y_test):
     
     return results
 
-    return results
 
 # 5. Feature Importance
 def plot_feature_importance(results, feature_names):
