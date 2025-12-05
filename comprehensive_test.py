@@ -9,7 +9,7 @@ import json
 import numpy as np
 import sys
 
-API_BASE_URL = "http://127.0.0.1:5000"
+API_BASE_URL = "http://127.0.0.1:5001"
 
 def print_section(title):
     """Print a formatted section header"""
@@ -47,7 +47,7 @@ def test_full_model():
             return False
             
     except requests.exceptions.ConnectionError:
-        print("❌ Connection Error: Flask API not running on port 5000")
+        print("❌ Connection Error: Flask API not running on port 5001")
         return False
     except Exception as e:
         print(f"❌ Test Failed: {str(e)}")
@@ -80,7 +80,7 @@ def test_simple_model():
             return False
             
     except requests.exceptions.ConnectionError:
-        print("❌ Connection Error: Flask API not running on port 5000")
+        print("❌ Connection Error: Flask API not running on port 5001")
         return False
     except Exception as e:
         print(f"❌ Test Failed: {str(e)}")

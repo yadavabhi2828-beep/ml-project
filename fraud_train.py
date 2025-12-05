@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, IsolationForest
 from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, roc_curve, precision_recall_curve
 from imblearn.over_sampling import SMOTE
 import os
@@ -209,6 +209,45 @@ def train_simple_model(X, y):
     
     return {'Simple Model': {'model': model, 'auc': auc, 'y_pred': y_pred, 'y_pred_proba': y_pred_proba}}
 
+def train_anomaly_detector(X, y):
+    logger.info("--- Training Anomaly Detector (Isolation Forest) ---")
+    
+    # Isolation Forest is unsupervised, but we often train it on "normal" data
+    # to learn the distribution of legitimate transactions.
+    # Filter for legitimate transactions (Class 0)
+    X_normal = X[y == 0]
+    
+    # Split into train/test (we still want to evaluate on unseen data, including frauds)
+    # But for training the IF, we primarily use the normal train set.
+    # Actually, standard practice: fit on X_train (mostly normal), predict on X_test (mixed)
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    
+    # Filter training data to be only normal transactions for "semi-supervised" outlier detection
+    X_train_normal = X_train[y_train == 0]
+    
+    logger.info(f"Training Isolation Forest on {len(X_train_normal)} legitimate transactions...")
+    
+    # Initialize Isolation Forest
+    # contamination: expected proportion of outliers in the data set. 
+    # We know fraud is ~0.17%, so we can set it low or 'auto'.
+    iso_forest = IsolationForest(n_estimators=100, contamination=0.01, random_state=42, n_jobs=-1)
+    iso_forest.fit(X_train_normal)
+    
+    # Predict on test set
+    # Isolation Forest returns 1 for inliers, -1 for outliers
+    y_pred_iso = iso_forest.predict(X_test)
+    
+    # Map -1 (outlier) to 1 (fraud) and 1 (inlier) to 0 (legitimate) for comparison
+    y_pred_binary = [1 if x == -1 else 0 for x in y_pred_iso]
+    
+    logger.info("Anomaly Detection Evaluation:")
+    logger.info(f"\n{classification_report(y_test, y_pred_binary)}")
+    
+    # Save model
+    joblib.dump(iso_forest, Config.ANOMALY_MODEL_PATH)
+    logger.info(f"Anomaly Detection model saved to {Config.ANOMALY_MODEL_PATH}")
+
 def main():
     df = load_data()
     X, y, scaler_amount, scaler_time = preprocess_data(df)
@@ -229,6 +268,10 @@ def main():
     simple_results = train_simple_model(X, y)
     # Plot importance for simple model (pass correct feature names)
     plot_feature_importance(simple_results, np.array(['scaled_amount', 'scaled_time']))
+
+    # 3. Train Anomaly Detector
+    logger.info("=== Training Anomaly Detector ===")
+    train_anomaly_detector(X, y)
 
     logger.info("Training complete!")
 

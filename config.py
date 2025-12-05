@@ -16,13 +16,14 @@ class Config:
     SIMPLE_MODEL_PATH = os.path.join(MODEL_DIR, 'simple_model.pkl')
     SCALER_AMOUNT_PATH = os.path.join(MODEL_DIR, 'scaler_amount.pkl')
     SCALER_TIME_PATH = os.path.join(MODEL_DIR, 'scaler_time.pkl')
+    ANOMALY_MODEL_PATH = os.path.join(MODEL_DIR, 'anomaly_model.pkl')
     
     # Data files
     DATA_PATH = os.path.join(BASE_DIR, 'cleaned_creditcard.csv')
     
     # API settings
     API_HOST = "0.0.0.0"
-    API_PORT = 8000
+    API_PORT = 5001
     API_WORKERS = 1
     
     # Batch processing

@@ -3,7 +3,7 @@ import json
 import numpy as np
 
 # URL of the Flask API
-url = 'http://127.0.0.1:5000/predict'
+url = 'http://127.0.0.1:5001/predict'
 
 # Generate random sample data
 # Features: Time, Amount, V1-V28

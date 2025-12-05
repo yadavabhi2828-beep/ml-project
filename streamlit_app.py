@@ -18,9 +18,6 @@ st.set_page_config(
 # Custom CSS for styling
 st.markdown("""
     <style>
-    .main {
-        background-color: #f5f5f5;
-    }
     .stButton>button {
         width: 100%;
         background-color: #ff4b4b;
@@ -53,11 +50,12 @@ st.sidebar.info("This application uses a Random Forest model to detect fraudulen
 st.sidebar.subheader("Model Settings")
 model_choice = st.sidebar.radio(
     "Select Model",
-    ["Full Model (Best Accuracy)", "Simple Model (Time & Amount Only)"],
-    help="Full Model requires V1-V28 features. Simple Model only needs Time and Amount."
+    ["Full Model (Best Accuracy)", "Simple Model (Time & Amount Only)", "Anomaly Detection (Isolation Forest)"],
+    help="Full Model requires V1-V28 features. Simple Model only needs Time and Amount. Anomaly Detection is unsupervised."
 )
 
 use_simple_model = "Simple Model" in model_choice
+use_anomaly_model = "Anomaly Detection" in model_choice
 
 
 
@@ -107,6 +105,14 @@ with tab1:
                     'Amount': amount_val
                 }
                 response = requests.post(f"{API_BASE_URL}/predict_simple", json=payload)
+            elif use_anomaly_model:
+                # Call Anomaly Model API
+                payload = {
+                    'Time': time_val,
+                    'Amount': amount_val,
+                    **{f'V{i}': features[i-1] for i in range(1, 29)}
+                }
+                response = requests.post(f"{API_BASE_URL}/predict_anomaly", json=payload)
             else:
                 # Call Full Model API
                 payload = {
@@ -146,6 +152,8 @@ with tab2:
     st.header("Upload Transactions")
     if use_simple_model:
         st.markdown("Upload a CSV file. Required columns: `Time`, `Amount`.")
+    elif use_anomaly_model:
+        st.markdown("Upload a CSV file. Required columns: `Time`, `Amount`, `V1`...`V28`.")
     else:
         st.markdown("Upload a CSV file. Required columns: `Time`, `Amount`, `V1`...`V28`.")
     
@@ -160,6 +168,7 @@ with tab2:
             if use_simple_model:
                 required_cols = ['Time', 'Amount']
             else:
+                # Both Full Model and Anomaly Model require all features
                 required_cols = ['Time', 'Amount'] + [f'V{i}' for i in range(1, 29)]
                 
             missing_cols = [col for col in required_cols if col not in df.columns]
@@ -198,6 +207,8 @@ with tab2:
                                 # Call batch API
                                 if use_simple_model:
                                     endpoint = f"{API_BASE_URL}/predict_simple_batch"
+                                elif use_anomaly_model:
+                                    endpoint = f"{API_BASE_URL}/predict_anomaly_batch"
                                 else:
                                     endpoint = f"{API_BASE_URL}/predict_batch"
                                 

@@ -6,6 +6,7 @@ import joblib
 import pandas as pd
 import numpy as np
 import os
+import socket
 from config import Config, setup_logging
 
 # Setup logging
@@ -38,6 +39,13 @@ def load_resources():
             models['simple_model'] = None
             logger.warning("simple_model.pkl not found")
             
+        if os.path.exists(Config.ANOMALY_MODEL_PATH):
+            models['anomaly_model'] = joblib.load(Config.ANOMALY_MODEL_PATH)
+            logger.info("Anomaly model loaded successfully")
+        else:
+            models['anomaly_model'] = None
+            logger.warning("anomaly_model.pkl not found")
+            
         logger.info("Resources loaded successfully")
     except Exception as e:
         logger.error(f"Error loading resources: {e}")
@@ -45,40 +53,48 @@ def load_resources():
 
 # Input Schemas
 class TransactionSimple(BaseModel):
-    time: float
-    amount: float
+    time: float = Field(..., alias='Time')
+    amount: float = Field(..., alias='Amount')
+
+    model_config = {
+        "populate_by_name": True
+    }
 
 class TransactionFull(BaseModel):
-    time: float
-    amount: float
-    v1: float
-    v2: float
-    v3: float
-    v4: float
-    v5: float
-    v6: float
-    v7: float
-    v8: float
-    v9: float
-    v10: float
-    v11: float
-    v12: float
-    v13: float
-    v14: float
-    v15: float
-    v16: float
-    v17: float
-    v18: float
-    v19: float
-    v20: float
-    v21: float
-    v22: float
-    v23: float
-    v24: float
-    v25: float
-    v26: float
-    v27: float
-    v28: float
+    time: float = Field(..., alias='Time')
+    amount: float = Field(..., alias='Amount')
+    v1: float = Field(..., alias='V1')
+    v2: float = Field(..., alias='V2')
+    v3: float = Field(..., alias='V3')
+    v4: float = Field(..., alias='V4')
+    v5: float = Field(..., alias='V5')
+    v6: float = Field(..., alias='V6')
+    v7: float = Field(..., alias='V7')
+    v8: float = Field(..., alias='V8')
+    v9: float = Field(..., alias='V9')
+    v10: float = Field(..., alias='V10')
+    v11: float = Field(..., alias='V11')
+    v12: float = Field(..., alias='V12')
+    v13: float = Field(..., alias='V13')
+    v14: float = Field(..., alias='V14')
+    v15: float = Field(..., alias='V15')
+    v16: float = Field(..., alias='V16')
+    v17: float = Field(..., alias='V17')
+    v18: float = Field(..., alias='V18')
+    v19: float = Field(..., alias='V19')
+    v20: float = Field(..., alias='V20')
+    v21: float = Field(..., alias='V21')
+    v22: float = Field(..., alias='V22')
+    v23: float = Field(..., alias='V23')
+    v24: float = Field(..., alias='V24')
+    v25: float = Field(..., alias='V25')
+    v26: float = Field(..., alias='V26')
+    v27: float = Field(..., alias='V27')
+    v28: float = Field(..., alias='V28')
+
+    model_config = {
+        "populate_by_name": True
+    }
 
 class BatchTransactionSimple(BaseModel):
     transactions: List[TransactionSimple] = Field(..., max_items=Config.MAX_BATCH_SIZE)
@@ -198,6 +214,127 @@ def predict_full(transaction: TransactionFull):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
+
+@app.post("/predict_anomaly")
+def predict_anomaly(transaction: TransactionFull):
+    if not models.get('anomaly_model'):
+        raise HTTPException(status_code=503, detail="Anomaly model not available.")
+    
+    try:
+        # Preprocess (same as full model)
+        scaler_amount = models['scaler_amount']
+        scaler_time = models['scaler_time']
+        
+        scaled_amount = scaler_amount.transform([[transaction.amount]])
+        scaled_time = scaler_time.transform([[transaction.time]])
+        
+        # Prepare features V1-V28
+        features = [getattr(transaction, f'v{i}') for i in range(1, 29)]
+        
+        # Create DataFrame
+        input_df = pd.DataFrame([features], columns=[f'V{i}' for i in range(1, 29)])
+        input_df['scaled_amount'] = scaled_amount.flatten()
+        input_df['scaled_time'] = scaled_time.flatten()
+        
+        # Reorder columns
+        cols = [f'V{i}' for i in range(1, 29)] + ['scaled_amount', 'scaled_time']
+        final_input = input_df[cols]
+        
+        # Predict
+        model = models['anomaly_model']
+        # Isolation Forest returns -1 for anomaly, 1 for normal
+        prediction_iso = model.predict(final_input)[0]
+        
+        # Map to our standard: 1 (Fraud/Anomaly), 0 (Normal)
+        is_anomaly = (prediction_iso == -1)
+        prediction = 1 if is_anomaly else 0
+        
+        # Anomaly score (lower is more anomalous)
+        score = model.decision_function(final_input)[0]
+        
+        return {
+            "prediction": int(prediction),
+            "is_fraud": bool(is_anomaly),
+            "probability": float(score), # Not a probability, but a score
+            "model_used": "Anomaly Detection (Isolation Forest)"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
+
+@app.post("/predict_anomaly_batch", response_model=BatchPredictionResponse)
+def predict_anomaly_batch(batch: BatchTransactionFull):
+    """Batch prediction endpoint for Anomaly Detection (Isolation Forest)"""
+    if not models.get('anomaly_model'):
+        raise HTTPException(status_code=503, detail="Anomaly model not available")
+    
+    try:
+        import time
+        start_time = time.time()
+        
+        logger.info(f"Processing batch of {len(batch.transactions)} transactions with anomaly model")
+        
+        # Convert batch to DataFrame
+        data = []
+        for txn in batch.transactions:
+            row = {
+                'Time': txn.time,
+                'Amount': txn.amount,
+                **{f'V{i}': getattr(txn, f'v{i}') for i in range(1, 29)}
+            }
+            data.append(row)
+        
+        df = pd.DataFrame(data)
+        
+        # Vectorized scaling
+        scaler_amount = models['scaler_amount']
+        scaler_time = models['scaler_time']
+        
+        scaled_amount = scaler_amount.transform(df[['Amount']])
+        scaled_time = scaler_time.transform(df[['Time']])
+        
+        # Prepare features
+        input_df = df[[f'V{i}' for i in range(1, 29)]].copy()
+        input_df['scaled_amount'] = scaled_amount.flatten()
+        input_df['scaled_time'] = scaled_time.flatten()
+        
+        # Reorder columns
+        cols = [f'V{i}' for i in range(1, 29)] + ['scaled_amount', 'scaled_time']
+        final_input = input_df[cols]
+        
+        # Batch prediction
+        model = models['anomaly_model']
+        predictions_iso = model.predict(final_input)
+        scores = model.decision_function(final_input)
+        
+        # Map -1 to 1 (Fraud), 1 to 0 (Normal)
+        predictions = np.array([1 if p == -1 else 0 for p in predictions_iso])
+        
+        # Build response
+        results = []
+        for pred, score in zip(predictions, scores):
+            results.append(PredictionResponse(
+                prediction=int(pred),
+                is_fraud=bool(pred == 1),
+                probability=float(score), # Score, not probability
+                model_used="Anomaly Detection (Isolation Forest)"
+            ))
+        
+        processing_time = (time.time() - start_time) * 1000
+        fraud_count = int(predictions.sum())
+        
+        logger.info(f"Batch processed in {processing_time:.2f}ms. Anomalies detected: {fraud_count}/{len(batch.transactions)}")
+        
+        return BatchPredictionResponse(
+            predictions=results,
+            total_transactions=len(batch.transactions),
+            fraud_count=fraud_count,
+            processing_time_ms=processing_time
+        )
+        
+    except Exception as e:
+        logger.error(f"Batch prediction error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Batch prediction error: {str(e)}")
 
 @app.post("/predict_batch", response_model=BatchPredictionResponse)
 def predict_full_batch(batch: BatchTransactionFull):
@@ -331,4 +468,25 @@ def predict_simple_batch(batch: BatchTransactionSimple):
         raise HTTPException(status_code=500, detail=f"Batch prediction error: {str(e)}")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host=Config.API_HOST, port=Config.API_PORT)
+    def is_port_in_use(port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(('localhost', port)) == 0
+
+    def find_available_port(start_port: int, max_attempts: int = 5) -> int:
+        port = start_port
+        for _ in range(max_attempts):
+            if not is_port_in_use(port):
+                return port
+            logger.warning(f"Port {port} is in use, trying next port...")
+            port += 1
+        raise RuntimeError(f"Could not find an available port starting from {start_port}")
+
+    # Start from 5000 as requested, fallback to 5001 etc.
+    # Note: Config.API_PORT is currently 5001, but we'll override it here based on availability
+    target_port = 5000
+    available_port = find_available_port(target_port)
+    
+    if available_port != Config.API_PORT:
+        logger.info(f"Starting API on port {available_port} (Configured: {Config.API_PORT})")
+    
+    uvicorn.run(app, host=Config.API_HOST, port=available_port)
